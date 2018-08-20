@@ -1,0 +1,98 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+
+Function modifyGenCumSkyEmmitanceValues(ByVal genCumSkyFile As String)
+
+	Dim counterLine As Long
+	Dim numItems As Long
+	Dim delimiterString As String
+	Dim textLine As String
+	Dim stringArray() As String
+	Dim numArray() As Double
+	Dim idSky As Long
+	Dim irradpatch#(147)
+	Dim skyMin, skyMax As Double
+	Dim k, i, j, m As Long
+	Dim slowRun As Boolean
+	slowRun = False
+
+	'Normalization and RGB Variables
+	Dim vis As T_SURFVISUALIZE
+	Dim X, Y As Integer
+	Dim norm_irrad, a As Double
+	Dim r, g, b As Integer
+
+
+	'Read GenCumSky File!
+	delimiterString = Chr(9) & Chr(32) & Chr(44)
+	counterLine = 0
+	EnableTextPrinting(True)
+	Print "Updating Sky"
+	Print genCumSkyFile
+	EnableTextPrinting(False)
+
+	Open genCumSkyFile For Input As #2
+	While Not EOF(2)
+		Line Input #2, textLine
+		numItems = ParseString(textLine, delimiterString, numArray,stringArray)
+		irradpatch(counterLine) = numArray(0)   'wavelength
+		counterLine += 1
+	Wend
+
+	skyMin = irradpatch(145)
+	skyMax = irradpatch(146)
+
+	For k = 0 To 144 ' Ring Loop
+
+		idSky = FindFullName( "Geometry.SkyModel.SkySegment " & k+1 )
+
+		If slowRun = True Then
+
+		' Not modifying visualization to save running time.
+			' Calculate RGB Values and Assign
+			norm_irrad=(irradpatch(k)-skyMin)/(skyMax-skyMin)
+			a=(1-norm_irrad)/0.25
+			' Poor man's flooring: 23.6-0.5 = 23.1 --> 23
+			X=Round(a-0.5,0)
+			Y=Round(255*((a)-X)-0.5,0)
+
+		    Select Case X
+		        Case 0
+		            r=255 : g=Y : b=0
+		        Case 1
+		            r=255-Y : g=255 : b=0
+		        Case 2
+		            r=0 : g=255 : b=Y
+		        Case 3
+		            r=0 : g=255-Y : b=255
+		        Case 4
+		            r=0 : g=0 : b=255
+		    End Select
+
+			vis.DiffuseR=r : vis.DiffuseG=g : vis.DiffuseB=b
+			vis.SpecularR=r : vis.SpecularG=g : vis.SpecularB=b
+			vis.AmbientR=r : vis.AmbientG=g : vis.AmbientB=b
+
+			SetSurfVisualize idSky, vis
+		End If
+
+		AuxDataSetData idSky, "emitt", irradpatch(k)
+
+	Next
+
+	Update
+	Close #2
+	EnableTextPrinting(True)
+	Print "Sky Updated"
+	EnableTextPrinting(False)
+
+
+End Function
+
+Sub Main
+
+	'modifyGenCumSkyEmmitanceValues("D:\Dropbox\sayala_lab\SPIE2018\FRED\data\Tucson_Yearly_Emmit_GenCumSky_byWavelength\wav_335.txt")
+
+End Sub

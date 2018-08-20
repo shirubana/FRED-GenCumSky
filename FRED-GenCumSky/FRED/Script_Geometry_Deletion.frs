@@ -1,0 +1,64 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+Sub Main
+
+	'Geometry Deletion
+
+	'INSTRUCTIONS: To add this coating to your file run this script on your loading script:
+	'Dim BASEFilename As String
+	'BASEFilename = "D:\Dropbox\sayala_lab\PrismSolar\"             '<-- REPLACE THIS WITH YOUR BASE Folder where Script_EQE_Si is
+	'Dim mylibModel As Object
+	'Set mylibModel = CreateLib (BASEFilename & "Script_Geometry_Deletion.frs")
+	'mylibModel.Main
+	'Set mylibModel = Nothing
+
+
+	Dim entCount As Long, curEnt As Long
+	entCount = GetEntityCount()
+
+	'FAST DELETE GEOMETRY
+	curEnt = 2
+	DeleteEntity 2
+
+	'FAST DELETE SOURCSE
+	curEnt = 1
+	DeleteEntity 1
+
+	'For curEnt = entCount-1 To 4 Step -1
+	'	If Not IsSource( curEnt ) Then
+	'		DeleteEntity ( curEnt )
+	'	End If
+	'Next
+
+	'entCount = GetEntityCount()
+	'For curEnt = entCount-1 To 4 Step -1
+	'	If IsSource( curEnt ) Then
+	'		DeleteEntity ( curEnt )
+	'	End If
+	'Next
+
+	Dim coatCount As Long, curCoat As Long
+	coatCount = GetCoatingCount()
+	For curCoat = coatCount-1 To 5 Step -1
+		DeleteCoating curCoat
+	Next
+
+	Dim raytrCtrlCount As Long, curRaytrc As Long
+	raytrCtrlCount = GetRaytraceCtrlCount ()
+	For curRaytrc = raytrCtrlCount-1 To 4 Step -1
+		DeleteRaytraceCtrl curRaytrc
+	Next
+
+	Dim scatCount As Long, curScat As Long
+	scatCount = GetScatterCount ()
+	For curScat = scatCount-1 To 3 Step -1
+		DeleteScatter curScat
+	Next
+
+	SpectrumDeleteAllNodes( )
+
+	Update
+
+End Sub

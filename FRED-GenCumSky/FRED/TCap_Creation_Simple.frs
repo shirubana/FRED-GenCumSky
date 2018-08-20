@@ -1,0 +1,322 @@
+'#Language "WWB-COM"
+Dim subnode As Long
+Dim mainsubnode As Long
+Dim ent As T_ENTITY
+Dim idCell As Long
+Dim op As T_OPERATION
+Dim idTrim As Long
+Dim trm As T_TRIMVOLUME
+Dim bound As String
+Dim tubeData As T_TUBE
+Dim i As Long
+Dim cell2cell As Double
+Dim idGlass As Long
+Dim idGlassH As Long
+
+Dim child As Long
+Dim sibling As Long
+Dim rtCtrl As Long
+Dim coatingID As Long
+Dim mtrl1 As Long
+Dim mtrl2 As Long
+Dim mtrl4 As Long
+Dim vis As T_SURFVISUALIZE
+
+Dim DcgPlane As T_ENTITY
+Dim tDCGMove As T_OPERATION
+Dim idDCG As Long
+Dim surfDCG As Long
+Dim hoe87 As T_HOE
+Dim hpc87(0) As Double
+
+Dim idGround As Long
+Dim GroundEnt As T_ENTITY
+Dim GroundMove As T_OPERATION
+
+Option Explicit
+
+Function tCapCreate(ByVal capSize As Double)
+'Units in mm.
+
+	cell2cell=20 ' mm
+
+	'Fred Surface Characteristics
+	rtCtrl = 3 ' Allow all
+	coatingID = 3 ' Standard Coating, 96% transmittance.
+	mtrl1 = 0 ' Air
+	mtrl2 = 3 ' Standard Glass BK7
+	'mtrl3 = 4 ' Silicon
+
+
+	Dim BASEFilename As String
+	BASEFilename = "D:\Dropbox\sayala_lab\PrismSolar\"
+	Dim mylibModel As Object
+
+	'Load EQE_Si
+	Set mylibModel = CreateLib (BASEFilename & "Script_EQE_Si.frs")
+	mylibModel.Main
+	Set mylibModel = Nothing
+
+	'Set Glass Catalogs
+	Dim idaSi As Long, idpSi As Long
+	idaSi = AddCatalogGlass( "a_Si", "Custom" )
+	idpSi = AddCatalogGlass( "p_Si", "Custom" )
+
+	'Raytrace Control
+	Dim rtCtrlAll As T_RAYTRACECTRL
+	Dim idRayCtrlAllAbs As Long
+	GetRaytraceCtrl 3, rtCtrlAll
+	rtCtrlAll.AllowAbsorbed = True
+	rtCtrlAll.name = "Allow All and Absorb"
+	rtCtrlAll.Description = "Allow All ray components and absorbs, scatter and specular ancestry to 2 "
+	rtCtrlAll.SpecularAncestryCutoff = 2		'Ancestry specular
+	rtCtrlAll.ScatterAncestryCutoff  = 1		'Ancestry scattering
+	idRayCtrlAllAbs = AddRaytraceCtrl ( rtCtrlAll )
+
+	'SetRaytraceCtrl idRayCtrl, rtCtrlAll
+
+' 	For i = GetEntityCount() -1 To 4 Step -1
+ '		DeleteEntity i
+ '	Next i
+ '	Update
+
+	InitEntity (ent)
+	ent.name = "Demo_Panel"
+	ent.Description = "4 bifacial cells"
+	mainsubnode = AddSubassembly (ent)
+
+	'Create Custom Element
+	ent.name = "keep inside"
+	ent.parent = mainsubnode
+	subnode = AddCustomElement ( ent )
+
+	For i = 0 To 3
+		'Add Cell Aperture
+		ent.name = "CellTop " & i+1
+		ent.Description = "Wafer Cylinder"
+		ent.neverTraceable=False
+		ent.parent=subnode
+		idCell = AddPlane( ent)
+		SetTrimVol idCell, 63, 9.5, 2, 0, 0, 0, "Box"
+
+		Update
+
+
+		op.parent = subnode : op.Type="Shift"
+		op.val1=0 : op.val2=cell2cell*i : op.val3=0
+		AddOperation idCell, op
+
+		op.parent = subnode : op.Type="RotateX"
+		op.val1=90
+		AddOperation idCell, op
+
+
+		Update
+
+	Next
+
+	'Create Subassembly
+
+	'Create Glass that encapsulates module
+	ent.name = "Glass"
+	ent.parent = mainsubnode
+	ent.neverTraceable = False
+	idGlass = ElemAddBlock ( ent )
+	ElemSetParmValue (idGlass, 0, 63) 'xsemiap
+	ElemSetParmValue (idGlass, 1, 51) 'Ysemiap
+	ElemSetParmValue (idGlass, 2, 2) 'zsemiap (thickness)
+
+	op.parent = mainsubnode
+	op.Type = "Shift"
+	op.val1 = 0 : op.val2=51/2-7+5 : op.val3=0 ' #123figure what this value is exactly at some point.
+	AddOperation idGlass, op
+
+	op.parent = mainsubnode
+	op.Type = "RotateX"
+	op.val1 = 90
+	AddOperation idGlass, op
+
+
+
+	'Create Glass that encapsulates DCG
+	ent.name = "Hologram Glass"
+	ent.parent = mainsubnode
+	ent.neverTraceable = False
+	idGlassH = ElemAddBlock ( ent )
+	ElemSetParmValue (idGlassH, 0, 63) 'xsemiap
+	ElemSetParmValue (idGlassH, 1, capSize/2) 'Ysemiap
+	ElemSetParmValue (idGlassH, 2, 2) 'zsemiap (thickness)
+
+	op.parent = mainsubnode
+	op.Type = "Shift"
+	op.val1 = 0  : op.val2=0 : op.val3=-51-25.5 ' #123figure what this value is exactly at some point.
+	AddOperation idGlassH, op
+	op.Type = "RotateX"
+	op.val1 = 180
+	AddOperation idGlassH, op
+
+	Update
+
+	vis.opacity=0.15
+'	SetSurfVisualize idGlass, vis
+
+	child=GetChild(idGlass)
+	Print child
+
+	'Assign all material, raytrace, and surface prpoerties
+
+	If child = -1 Then
+
+	Else
+		SetSurfVisualize child, vis
+		SetSurfRaytraceCtrl child, rtCtrl
+		SetSurfCoating child, coatingID
+		SetSurfMaterials child, mtrl1, mtrl2
+		While GetSibling(child) > -1
+			child = GetSibling(child)
+			SetSurfVisualize child, vis
+			SetSurfRaytraceCtrl child, rtCtrl
+			SetSurfCoating child, coatingID
+			SetSurfMaterials child, mtrl1, mtrl2
+		Wend
+
+	End If
+
+
+	vis.opacity=0.30
+	child=GetChild(idGlassH)
+	Print child
+
+	'Assign all material, raytrace, and surface prpoerties
+
+	If child = -1 Then
+
+	Else
+		SetSurfVisualize child, vis
+		SetSurfRaytraceCtrl child, rtCtrl
+		SetSurfCoating child, coatingID
+		SetSurfMaterials child, mtrl1, mtrl2
+		While GetSibling(child) > -1
+			child = GetSibling(child)
+			SetSurfVisualize child, vis
+			SetSurfRaytraceCtrl child, rtCtrl
+			SetSurfCoating child, coatingID
+			SetSurfMaterials child, mtrl1, mtrl2
+		Wend
+
+	End If
+
+
+	Update
+
+
+	'***************** DCG ************************************************
+
+	' EAST DCG
+	InitEntity DcgPlane
+	DcgPlane.name = "Grating1EAST"
+	DcgPlane.parent = mainsubnode
+	idDCG = ElemAddPlane( DcgPlane )
+	ElemSetParmValue (idDCG, 0, (capSize/4)-1)
+	ElemSetParmValue (idDCG, 1, 62)
+
+	Update
+
+ 	child = FindFullName( GetFullName ( idGlassH ) & ".Back Face (-Z)" )
+	startCoordSys idDCG, child
+	tDCGMove.parent=child
+	tDCGMove.Type="Shift"
+	tDCGMove.val1=-capSize/4 ' mm shift
+	tDCGMove.val3=-1 ' mm shift
+	AddOperation idDCG, tDCGMove
+
+	tDCGMove.parent=child
+	tDCGMove.Type="RotateZ"
+	tDCGMove.val1=-90
+	AddOperation idDCG, tDCGMove
+
+	Update
+
+	'Set DCG Surface properties
+	surfDCG = FindFullName( GetFullName ( idDCG ) & ".Surface")
+	SetSurfMaterials surfDCG, 3, 3
+ 	SetSurfCoating surfDCG, 2' Transmit
+	SetSurfRaytraceCtrl surfDCG, 3
+
+	'Set Hologram parameters
+	hoe87.isSrc1Position=False : hoe87.isSrc2Position=False
+	hoe87.isSrc1Real=True : hoe87.isSrc2Real=True
+	hoe87.x1=0 : hoe87.y1=0 : hoe87.z1=1 '149000000000000
+	hoe87.x2=0.5 : hoe87.y2=0 : hoe87.z2=1
+	hoe87.exposureRefIndex=1.54 : hoe87.exposureWavelength=0.4
+	SetDiffractHOE surfDCG, hoe87, "none", hpc87()
+	SetDiffractAddPhasePerLine surfDCG, False
+	SetDiffractPhaseOffsetPerLine surfDCG, 0
+
+	'Changing ray colors because why not.
+	SetDiffractEfficiencyFile surfDCG, "D:\Dropbox\sayala_lab\SPIE2018\FRED\data\BifacialGrating.txt"
+	ChangeSurfRayColor surfDCG, "transmit", 0, 255, 0  ' green
+	ChangeSurfRayColor surfDCG, "reflect", 255, 255, 0   ' yellow
+	ChangeSurfRayColor surfDCG, "diffract", 255, 0, 255   ' diffract
+
+	Update
+
+
+	'WEST DCG *********************************
+	InitEntity DcgPlane
+	DcgPlane.name = "Grating2WEST"
+	DcgPlane.parent = mainsubnode
+	idDCG = ElemAddPlane( DcgPlane )
+	ElemSetParmValue (idDCG, 0, (capSize/4)-1)
+	ElemSetParmValue (idDCG, 1, 62)
+
+	Update
+
+ 	child = FindFullName( GetFullName ( idGlassH ) & ".Back Face (-Z)" )
+	startCoordSys idDCG, child
+	tDCGMove.parent=child
+	tDCGMove.Type="RotateZ"
+	tDCGMove.val1=90
+	AddOperation idDCG, tDCGMove
+
+	tDCGMove.parent=child
+	tDCGMove.Type="Shift"
+	tDCGMove.val1=0 ' mm shift
+	tDCGMove.val2=-(capSize/4) ' mm shift
+	tDCGMove.val3=-1 ' mm shift
+	AddOperation idDCG, tDCGMove
+
+
+	Update
+
+	'Set DCG Surface properties
+	surfDCG = FindFullName( GetFullName ( idDCG ) & ".Surface")
+	SetSurfMaterials surfDCG, 3, 3
+ 	SetSurfCoating surfDCG, 2' Transmit
+	SetSurfRaytraceCtrl surfDCG, 3
+
+	'Set Hologram parameters
+	hoe87.isSrc1Position=False : hoe87.isSrc2Position=False
+	hoe87.isSrc1Real=True : hoe87.isSrc2Real=True
+	hoe87.x1=0 : hoe87.y1=0 : hoe87.z1=1 '149000000000000
+	hoe87.x2=0.5 : hoe87.y2=0 : hoe87.z2=1
+	hoe87.exposureRefIndex=1.54 : hoe87.exposureWavelength=0.4
+	SetDiffractHOE surfDCG, hoe87, "none", hpc87()
+	SetDiffractAddPhasePerLine surfDCG, False
+	SetDiffractPhaseOffsetPerLine surfDCG, 0
+
+	'Changing ray colors because why not.
+	SetDiffractEfficiencyFile surfDCG, "D:\Dropbox\sayala_lab\SPIE2018\FRED\data\BifacialGrating.txt"
+	ChangeSurfRayColor surfDCG, "transmit", 0, 255, 0  ' green
+	ChangeSurfRayColor surfDCG, "reflect", 255, 255, 0   ' yellow
+	ChangeSurfRayColor surfDCG, "diffract", 255, 0, 255   ' diffract
+
+	Update
+
+End Function
+
+
+Sub Main
+
+	tCapCreate(200.0)
+End Sub

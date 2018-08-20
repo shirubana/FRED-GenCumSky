@@ -1,0 +1,245 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+
+Function IrradAtModule(ByVal numRays As Long, ByVal fname2 As String, ByVal wavfolder As String)
+
+	EnableTextPrinting ( False )
+
+	'GenCumSky Variables
+	Dim mylibModel As Object
+
+	'VARIABLES
+	Dim wave As T_WAVELENGTHSPEC
+	Dim wavct As Long
+	Dim wavlist#(2001)
+	Dim sensorDisplacement As Double
+	Dim idCell As Long
+	Dim i, jj, mm, foo As Long
+	Dim tBlockMove As T_OPERATION
+	Dim FrontIrrad#(150) ' There are only 72 cells in PrismSolar, but you can't assign a variable to define a variable so... just creating a overly big array.
+	Dim RearIrrad#(150)
+
+	'VARIABLES Source
+	Dim idSrc As Long
+	Dim SrcRandDirSett As T_SOURCEDIRRANGE
+	Dim NewSrc As T_ENTITY
+
+	'VARIABLES Final Calculation
+	Dim foundIt As Long
+	Dim row, col As Long
+	Dim VFcontrib As String
+	Dim skyId As Long
+	Dim dval As Double
+
+	'IRRADIANCE VALUES
+	Dim FrontIrrad1#(2001) ' There are only 72 cells in PrismSolar, but you can't assign a variable to define a variable so... just creating a overly big array.
+	Dim FrontIrrad2#(2001)
+	Dim FrontIrrad3#(2001)
+	Dim FrontIrrad4#(2001)
+	Dim RearIrrad1#(2001) ' There are only 72 cells in PrismSolar, but you can't assign a variable to define a variable so... just creating a overly big array.
+	Dim RearIrrad2#(2001)
+	Dim RearIrrad3#(2001)
+	Dim RearIrrad4#(2001)
+	Dim IrradTemp#(4)
+
+	'READING WAVELENGTHS
+	Dim numItems As Long
+	Dim counterLine As Long
+	Dim textLine As String
+	Dim delimiterString As String
+	Dim numArray() As Double
+	Dim stringArray() As String
+	Dim wavfile As String
+
+	'ASSIGNING VARIABLES
+	sensorDisplacement = 1 ' mm
+
+'		   	' ideally you can modify this but if you go too high it slows down, offers not significant improvement, and also sometimes doens't find the answer.
+						' This is because FRED only PRINTS the raysummary into the window, and only keeps track of so many rows.
+
+	'Read WAVELENGTHS into Array
+	wavfile="D:\Dropbox\sayala_lab\SPIE2018\Scripts\2002_Wavelengths_from_TMY3.txt"
+	wavfile="D:\Dropbox\sayala_lab\SPIE2018\Scripts\Wavelengths_Every_10nm.txt"
+	delimiterString = Chr(9) & Chr(32) & Chr(44)
+	counterLine = 0
+	Open wavfile For Input As #1
+	While Not EOF(1)
+		Line Input #1, textLine
+		numItems = ParseString(textLine, delimiterString, numArray,stringArray)
+		wavlist(counterLine) = numArray(0)   'wavelength
+		counterLine += 1
+	Wend
+
+	Close #1
+
+	'CREATE Source
+	InitEntity NewSrc
+	NewSrc.name = "Cell-Source"
+	idSrc = AddSource ( NewSrc )
+	'Insol = 1 ' VF important value. 1 for the half hemisphere. Since 1 is the deffault this line is commented out.
+	SetSourcePosGridRandom( idSrc, 4, 5, numRays , False )
+	SetSourceDirection( idSrc, 0, 0, -1 )
+	SetSourceMaterial idSrc, 3   'Source starts inside of Standard Glass
+
+	EnableTextPrinting(True)
+
+	Open fname2 For Output As #1
+
+		Write #1, "wav", "FrontIrrad1", "FrontIrrad2", "FrontIrrad3", "FrontIrrad4", "BackIrrad1",  "BackIrrad2", "BackIrrad3",  "BackIrrad4"   	 		' Total Power
+
+		For wavct = 0 To 73
+			'************ Modify Sky property for each patch's value at that Wavelength***************'
+			Set mylibModel = CreateLib ("D:\Dropbox\sayala_lab\SPIE2018\FRED\modifyGenCumSkyEmmitanceValues.frs")
+			'mylibModel.	modifyGenCumSkyEmmitanceValues("D:\Dropbox\sayala_lab\SPIE2018\FRED\data\Tucson_Yearly_Emmit_GenCumSky_byWavelength\wav_" & wavlist(wavct) & ".txt")
+			mylibModel.	modifyGenCumSkyEmmitanceValues(wavfolder & "wav_" & wavlist(wavct) & ".txt")
+
+			'*********** Front Irradiance calculation First***************'
+			'Setting Source to emmit in half the hemisphere
+			SrcRandDirSett.rayDirCount = 1
+			SrcRandDirSett.semiApeX = 90
+			SrcRandDirSett.semiApeY = 90
+			SrcRandDirSett.isLambertian=True
+			SrcRandDirSett.isElliptical=True
+			SrcRandDirSett.ZdirX = 0 : SrcRandDirSett.ZdirY = 0 : SrcRandDirSett.ZdirZ = -1
+			SrcRandDirSett.XdirX = 1 : SrcRandDirSett.XdirY = 0 : SrcRandDirSett.XdirZ = 0
+			SetSourceDirRange(idSrc,SrcRandDirSett)
+
+			'Setting Source Wavelength and Weight
+			wave.wavelen = wavlist(wavct)/1000
+			wave.weight = 1
+			SetSourceIthWavelengthSpec idSrc, 0, wave       ' in microns
+
+			For jj = 1 To 4
+
+				idCell=FindFullName( "Geometry.Demo_Panel.keep inside.CellTop " & jj )
+
+				startCoordSys idSrc, idCell
+				tBlockMove.parent= idCell
+				tBlockMove.Type="Shift"
+				tBlockMove.val1=0
+				tBlockMove.val2=0
+				tBlockMove.val3=-sensorDisplacement  ' roughly -2 mm
+				AddOperation idSrc, tBlockMove
+
+				Update
+
+				'TRACE AND EVALUATE HERE
+				TraceCreate
+				ClearOutputWindow
+				EnableTextPrinting ( True )
+				RaySummary
+
+				foundIt = FindTextString ( "RAY SUMMARY:" , row, col)
+				If foundIt = False Then
+					Print " BEWARE: Result's are being clipped by OutputWindow. Change Preferences and run again!"
+					Wait 100
+				End If
+
+				IrradTemp(jj-1) = 0
+
+				For i = 1 To 146
+					foundIt = FindTextString ( ".SkyModel.SkySegment " & i, row, col )
+
+					If foundIt = True Then
+						VFcontrib = GetTextString ( row, 2)
+						skyId = FindFullName( "Geometry.SkyModel.SkySegment " & i)
+						dval = AuxDataGetData ( skyId, "emitt" )
+						IrradTemp(jj-1) = IrradTemp(jj-1) + dval*CDbl(VFcontrib)
+					End If
+
+				Next
+
+				'Clean operation so it can be shifted to another cell
+				DeleteOperation idSrc, 1
+			Next		' Close of Front Irrad Loop
+
+			'Saving into Array
+			FrontIrrad1(wavct) = IrradTemp(0)
+			FrontIrrad2(wavct) = IrradTemp(1)
+			FrontIrrad3(wavct) = IrradTemp(2)
+			FrontIrrad4(wavct) = IrradTemp(3)
+
+			'********************** BACK IRRADIANCE**************'
+			'Setting Source to emmit in half the hemisphere
+
+			' BACK IRRADIANCE
+			SrcRandDirSett.ZdirX = 0 : SrcRandDirSett.ZdirY = 0 : SrcRandDirSett.ZdirZ = 1
+			SrcRandDirSett.XdirX = 1 : SrcRandDirSett.XdirY = 0 : SrcRandDirSett.XdirZ = 0
+			SetSourceDirRange(idSrc,SrcRandDirSett)
+
+			For jj = 1 To 1
+
+				idCell=FindFullName( "Geometry.Demo_Panel.keep inside.CellTop " & jj )
+
+				startCoordSys idSrc, idCell
+				tBlockMove.parent= idCell
+				tBlockMove.Type="Shift"
+				tBlockMove.val1=0
+				tBlockMove.val2=0
+				tBlockMove.val3=sensorDisplacement  ' roughly 2 mm
+				AddOperation idSrc, tBlockMove
+
+				Update
+
+				'TRACE AND EVALUATE HERE
+				TraceCreate
+				ClearOutputWindow
+				EnableTextPrinting ( True )
+				RaySummary
+
+				foundIt = FindTextString ( "RAY SUMMARY:" , row, col)
+				If foundIt = False Then
+					Print " BEWARE: Result's are being clipped by OutputWindow. Change Preferences and run again!"
+					Wait 100
+				End If
+
+				IrradTemp(jj-1) = 0
+
+				For i = 1 To 146
+					foundIt = FindTextString ( ".SkyModel.SkySegment " & i, row, col )
+
+					If foundIt = True Then
+						VFcontrib = GetTextString ( row, 2)
+						skyId = FindFullName( "Geometry.SkyModel.SkySegment " & i)
+						dval = AuxDataGetData ( skyId, "emitt" )
+						IrradTemp(jj-1) = IrradTemp(jj-1) + dval*CDbl(VFcontrib)
+					End If
+
+				Next
+
+				'Clean operation so it can be shifted to another cell
+				DeleteOperation idSrc, 1
+
+			Next 		 ' Close of Back Irrad Loop
+
+			'Saving into Array
+			RearIrrad1(wavct) = IrradTemp(0)
+			RearIrrad2(wavct) = IrradTemp(1)
+			RearIrrad3(wavct) = IrradTemp(2)
+			RearIrrad4(wavct) = IrradTemp(3)
+
+
+			'Writing the 8 sensors results for that wavelength
+			EnableTextPrinting (False)
+			Write #1, wavlist(wavct), FrontIrrad1(wavct), FrontIrrad2(wavct), FrontIrrad3(wavct), FrontIrrad4(wavct), RearIrrad1(wavct), RearIrrad2(wavct), RearIrrad3(wavct) , RearIrrad4(wavct)  		' Total Power
+
+		Next   ' Close of Wavelength loop
+
+
+
+	Close #1
+
+	'DELETE SOURCE HERE?
+
+
+End Function
+
+Sub Main
+
+	'IrradAtModule("D:\Dropbox\sayala_lab\SPIE2018\FRED\data\Output\3-Every10NM_withoutTcap.csv")
+
+
+
+End Sub

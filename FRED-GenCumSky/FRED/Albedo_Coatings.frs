@@ -1,0 +1,23 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+Sub Main
+	Dim cname As String
+	Dim wav_preset As Double
+	Dim i,id As Long
+	Dim albedo#(9)
+
+	wav_preset = 0.5875618
+
+	albedo(0) = 0.1 : albedo(1) = 0.2 : albedo(2) = 0.3 : albedo(3) = 0.4 : albedo(4) = 0.5 : albedo(5) = 0.6 : albedo(6) = 0.62 : albedo(7) = 0.7 : albedo(8) = 0.8 : albedo(9) = 0.9
+
+	For i = 0 To 9
+		cname = "Albedo " & albedo(i)
+		id = AddSampledCoating ( cname, wav_preset, albedo(i), 0, 1-albedo(i), 0 )
+'		AddSampledCoatingWavelength id, wav(i), refl(i), 0, 1-refl(i), 0
+	Next
+
+	Update
+
+End Sub

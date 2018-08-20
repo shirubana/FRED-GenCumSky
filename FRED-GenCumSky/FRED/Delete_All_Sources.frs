@@ -1,0 +1,18 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+Sub Main
+
+	'CLEAN SOURCE
+	Dim entCount As Long, curEnt As Long
+	entCount = GetEntityCount()
+	For curEnt = entCount-1 To 4 Step -1
+		If IsSource( curEnt ) Then
+			DeleteEntity ( curEnt )
+		End If
+	Next
+
+	Update
+
+End Sub

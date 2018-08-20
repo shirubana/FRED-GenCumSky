@@ -1,0 +1,99 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+
+Function IrradAtModule(ByVal Wavelength As Double)
+
+	EnableTextPrinting ( False )
+
+
+	'VARIABLES
+	Dim wave As T_WAVELENGTHSPEC
+
+	Dim idCell As Long
+	Dim i, jj, mm, foo As Long
+	Dim tBlockMove As T_OPERATION
+	Dim FrontIrrad#(150) ' There are only 72 cells in PrismSolar, but you can't assign a variable to define a variable so... just creating a overly big array.
+	Dim RearIrrad#(150)
+
+	'VARIABLES Source
+	Dim idSrc As Long
+	Dim SrcRandDirSett As T_SOURCEDIRRANGE
+	Dim numRays As Long
+	Dim NewSrc As T_ENTITY
+
+	'VARIABLES Final Calculation
+	Dim foundIt As Long
+	Dim row, col As Long
+	Dim VFcontrib As String
+	Dim skyId As Long
+	Dim dval As Double
+	Dim distanceSensor As Double
+	Dim sensorDisplacement As Double
+
+	sensorDisplacement = 1 ' mm
+
+	numRays = 1000000   ' ideally you can modify this but if you go too high it slows down, offers not significant improvement, and also sometimes doens't find the answer.
+						' This is because FRED only PRINTS the raysummary into the window, and only keeps track of so many rows.
+
+
+	'CREATE Source
+	InitEntity NewSrc
+	NewSrc.name = "Real one GOOD ONE Mini-cell-Source"
+	idSrc = AddSource ( NewSrc )
+	'Insol = 1 ' VF important value. 1 for the half hemisphere. Since 1 is the deffault this line is commented out.
+	SetSourcePosGridRandom( idSrc, 4, 5, numRays , False )
+	SetSourceDirection( idSrc, 0, 0, -1 )
+	SetSourceMaterial idSrc, 3   'Source starts inside of Standard Glass
+
+	'SetSourceMaterial idSrc, 0   'Source starts on surface of panel, so not inside glass
+
+	For jj = 1 To 1
+
+		idCell=FindFullName( "Geometry.Demo_Panel.keep inside.CellTop " & jj )
+
+		'Diffuse Light
+		SrcRandDirSett.rayDirCount = 1
+		SrcRandDirSett.semiApeX = 90
+		SrcRandDirSett.semiApeY = 90
+		SrcRandDirSett.isLambertian=True
+		SrcRandDirSett.isElliptical=True
+		SrcRandDirSett.ZdirX = 0 : SrcRandDirSett.ZdirY = 0 : SrcRandDirSett.ZdirZ = -1
+		SrcRandDirSett.XdirX = 1 : SrcRandDirSett.XdirY = 0 : SrcRandDirSett.XdirZ = 0
+		SetSourceDirRange(idSrc,SrcRandDirSett)
+
+		'Legacy In Case i want To start evaluating at different wavelengths.
+		'SetSourceSpectrum idSrc, spectNode
+		'SetSourceRayWavelengthRange idSrc, .5, .5 '.280, 4
+		'SetSourceRayWavelengthMethod idSrc, 1
+		'SetSourcePowerUnits  idSrc, 1
+		'SetSourcePower idSrc, Insol
+
+'		Print idSrc
+		wave.wavelen = Wavelength
+		wave.weight = 1
+		SetSourceIthWavelengthSpec idSrc, 0, wave       ' in microns
+
+		startCoordSys idSrc, idCell
+		tBlockMove.parent= idCell
+		tBlockMove.Type="Shift"
+		tBlockMove.val1=0
+		tBlockMove.val2=0
+		tBlockMove.val3=-sensorDisplacement  ' roughly -2 mm
+		AddOperation idSrc, tBlockMove
+
+		Next
+		Update
+
+
+End Function
+
+Sub Main
+
+
+
+	IrradAtModule(0.500)
+
+
+End Sub

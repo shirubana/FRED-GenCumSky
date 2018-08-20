@@ -1,0 +1,61 @@
+'This Script uses an already created source in a Fred file, traces it,
+'And calculates then the irradiance at that source's location based on the GenCumSky's emmittance variable.
+'It writes the result value into the file fname2
+
+Option Explicit
+
+Sub Main
+
+	Dim FrontIrrad#(150) ' There are only 72 cells in PrismSolar, but you can't assign a variable to define a variable so... just creating a overly big array.
+
+	'VARIABLES Final Calculation
+	Dim foundIt As Long
+	Dim row, col As Long
+	Dim VFcontrib As String
+	Dim skyId As Long
+	Dim dval As Double
+	Dim distanceSensor As Double
+
+
+	Dim fname2 As String
+	fname2 =  "D:\Dropbox\sayala_lab\Bifacials\Demo_panel\data\Output\DUMBTest.csv"
+
+
+	Open fname2 For Output As #1
+
+		Write #1, "FrontIrrad" 	 		' Total Power
+
+		foo = 0
+
+		TraceCreate
+		ClearOutputWindow
+		EnableTextPrinting ( True )
+		RaySummary
+
+		foundIt = FindTextString ( "RAY SUMMARY:" , row, col)
+		If foundIt = False Then
+			Print " BEWARE: Result's are being clipped by OutputWindow. Change Preferences and run again!"
+			Wait 100
+		End If
+
+		FrontIrrad(foo) = 0
+
+		For i = 1 To 146
+			foundIt = FindTextString ( ".SkyModel.SkySegment " & i, row, col )
+
+			If foundIt = True Then
+				VFcontrib = GetTextString ( row, 2)
+				skyId = FindFullName( "Geometry.SkyModel.SkySegment " & i)
+				dval = AuxDataGetData ( skyId, "emitt" )
+				FrontIrrad(foo) = FrontIrrad(foo) + dval*CDbl(VFcontrib)
+			End If
+
+		Next
+
+		EnableTextPrinting (False)
+
+		Write #1, FrontIrrad(foo)			' Total Power
+
+	Close #1
+
+End Sub

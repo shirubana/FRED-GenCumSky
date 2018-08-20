@@ -1,0 +1,704 @@
+'#Language "WWB-COM"
+Dim BASEFilename As String
+Dim genCumSkyFile As String
+Dim mainsubnode As Long ' The SkyModel node
+Dim idGround As Long ' The parent of the surface that is titled "Ground" node
+'Dim scatter As T_LAMBERTIANSCATTER
+
+Option Explicit
+
+
+Function genCumulSky(ByVal objectsize As Long, ByVal sazm As Long, ByVal genCumSkyFile As String, ByVal albedo As Double)
+	'Objectsize has to be the max(width, length, height) of the objects to be located at the center of the sphere.
+	'A Guesstimate is fine. rememer units are in mm though.
+	'The sky hemisphere radius sphere will be scaled to 100x that size or to 50km max.
+	'Read GenCumSky TextFile
+	'Textfile format is a list of 145 values for each of the sky patches,
+	'At the end the MIN and MAX value are also included
+
+	Dim idSky As Long
+	Dim irradpatch#(147)
+	Dim skyMin, skyMax As Double
+	Dim rings#(7)
+	Dim azi#(7)
+	Dim patchSize As Double
+	Dim i, j, k, m As Long
+
+	Dim ent As T_ENTITY
+	Dim op As T_OPERATION
+	Dim bound As String
+	Dim vis As T_SURFVISUALIZE
+	Dim GroundEnt As T_ENTITY
+	Dim GroundMove As T_OPERATION
+
+	'Normalization and RGB Variables
+	Dim X, Y As Integer
+	Dim norm_irrad, a As Double
+	Dim r, g, b As Integer
+
+	'Ground Variables
+	Dim scatter As T_LAMBERTIANSCATTER
+	Dim idGroundSurface As Long
+	Dim visGround As T_SURFVISUALIZE
+	Dim idscat As Long
+
+	'Reading File Variables
+	Dim numItems As Long
+	Dim counterLine As Long
+	Dim textLine As String
+	Dim delimiterString As String
+	Dim numArray() As Double
+	Dim stringArray() As String
+
+	InitEntity (ent)
+	ent.name = "SkyModel"
+	ent.Description = "GenCumluativeSky by Stone"
+	mainsubnode = AddSubassembly (ent)
+
+	If objectsize*100 > 50000000 Then ' mm
+		objectsize = 500000
+		Print "Sky is not 100x as big as the modeled object. Be careful!"
+	End If
+
+	'GROUND Properties
+	InitEntity GroundEnt
+	GroundEnt.name = "GROUND"
+	GroundEnt.parent = mainsubnode
+	idGround = ElemAddPlane( GroundEnt )
+	ElemSetParmValue (idGround, 0, objectsize*110)
+	ElemSetParmValue (idGround, 1, objectsize*110)
+	ElemSetParmValue (idGround, 2, 1)
+
+	op.Type="RotateY"
+	op.val1=180 '
+	AddOperation idGround, op
+
+	scatter.Refl = albedo
+	scatter.name = "Lambertian 62%"
+	scatter.Description = "Henry White Cool Roof"
+	scatter.ApplyRefl = True
+	scatter.ApplyTrans = False
+	scatter.HaltIncident = False
+	idscat = AddLambertianScatter(scatter)
+	Update
+	ElemAddScatter idGround, idscat
+
+
+	idGroundSurface = FindFullName( GetFullName ( idGround ) & ".Surface" )
+
+	visGround.opacity = 0.25
+	SetSurfVisualize idGroundSurface, visGround
+	SetSurfMaterials idGroundSurface, 0, 0  ' Air and Air... #123 Check if needs switch
+	SetSurfCoating idGroundSurface, 1  ' 100% Reflect #123 Add table later
+	SetSurfRaytraceCtrl idGroundSurface, 3   ' Allow all (Specular and Scattered!)
+	Update
+
+	rings(0)=29 : rings(1)=29 : rings(2)=23 : rings(3)=23 : rings(4)=17 : rings(5)=11 : rings(6)=5 : rings(7)=0
+	azi(0)=0 : azi(1)=12 : azi(2)=24 : azi(3)=36 : azi(4)=48 : azi(5)=60 : azi(6)=72 : azi(7)=84
+
+	patchSize = objectsize*100*Sin(12*PI/180*0.5)*1.1
+
+	'Read GenCumSky File!
+	delimiterString = Chr(9) & Chr(32) & Chr(44)
+	counterLine = 0
+	Open genCumSkyFile For Input As #1
+	While Not EOF(1)
+		Line Input #1, textLine
+		numItems = ParseString(textLine, delimiterString, numArray,stringArray)
+		irradpatch(counterLine) = numArray(0)   'wavelength
+		counterLine += 1
+	Wend
+
+	skyMin = irradpatch(145)
+	skyMax = irradpatch(146)
+
+
+	k=0  ' Counter of overall irradiance patch
+	For i = 0 To 6 ' Ring Loop
+		m=0
+
+		For j = 0 To rings(i) ' Number of patches on Ring loop
+
+			'Add SkySegment
+			ent.name = "SkySegment " & k+1
+			ent.parent=mainsubnode
+			idSky = AddPlane( ent)
+			SetTrimVol idSky, patchSize, patchSize, 2, 0, 0, 0, "Box"
+
+			'SkySegment Positioning
+			op.Type="RotateY"
+			op.val1=-90 ' mm shift
+			AddOperation idSky, op
+
+			op.Type="ShiftX"
+			op.val1=-objectsize*100 ' mm shift
+			AddOperation idSky, op
+
+			op.Type="RotateY"
+			op.val1=azi(i)+6 '
+			AddOperation idSky, op
+
+			op.Type="RotateZ"
+			op.val1=(360/(rings(i)+1))*m-90+sazm  '123
+			op.val1=(360/(rings(i)+1))*m-90+sazm-180  '123
+			op.val1=(360/(rings(i)+1))*-1*m-90+sazm-180  '123
+'			op.val1=((360/(rings(i)+1))*m-90+sazm-180)  '123
+			AddOperation idSky, op
+
+			'Assign all material, raytrace, and surface prpoerties
+			vis.opacity=0.3
+
+			' Calculate RGB Values and Assign
+			norm_irrad=(irradpatch(k)-skyMin)/(skyMax-skyMin)
+			a=(1-norm_irrad)/0.25
+			' Poor man's flooring: 23.6-0.5 = 23.1 --> 23
+			X=Round(a-0.5,0)
+			Y=Round(255*((a)-X)-0.5,0)
+
+		    Select Case X
+		        Case 0
+		            r=255 : g=Y : b=0
+		        Case 1
+		            r=255-Y : g=255 : b=0
+		        Case 2
+		            r=0 : g=255 : b=Y
+		        Case 3
+		            r=0 : g=255-Y : b=255
+		        Case 4
+		            r=0 : g=0 : b=255
+		    End Select
+
+			vis.DiffuseR=r : vis.DiffuseG=g : vis.DiffuseB=b
+			vis.SpecularR=r : vis.SpecularG=g : vis.SpecularB=b
+			vis.AmbientR=r : vis.AmbientG=g : vis.AmbientB=b
+
+			SetSurfVisualize idSky, vis
+			Update
+
+			'Set value for emmitance of that sky patch
+			AuxDataSetData idSky, "emitt", irradpatch(k)
+
+			'Increase Counters
+			k=k+1 : m=m+1
+
+		Next
+	Next
+
+	'Adding TOP PATCH
+	ent.name = "SkySegment " & k+1
+	ent.Description = "Wafer Cylinder"
+	ent.parent=mainsubnode
+	idSky = AddPlane( ent)
+	SetTrimVol idSky, patchSize, patchSize, 2, 0, 0, 0, "Box"
+
+	vis.opacity=0.3
+
+	' Calculate RGB Values and Assign
+	norm_irrad=(irradpatch(k)-skyMin)/(skyMax-skyMin)
+	a=(1-norm_irrad)/0.25
+	' Poor man's flooring: 23.6-0.5 = 23.1 --> 23
+	X=Round(a-0.5,0)
+	Y=Round(255*((a)-X)-0.5,0)
+
+    Select Case X
+        Case 0
+            r=255 : g=Y : b=0
+        Case 1
+            r=255-Y : g=255 : b=0
+        Case 2
+            r=0 : g=255 : b=Y
+        Case 3
+            r=0 : g=255-Y : b=255
+        Case 4
+            r=0 : g=0 : b=255
+    End Select
+
+	vis.DiffuseR=r : vis.DiffuseG=g : vis.DiffuseB=b
+	vis.SpecularR=r : vis.SpecularG=g : vis.SpecularB=b
+	vis.AmbientR=r : vis.AmbientG=g : vis.AmbientB=b
+	SetSurfVisualize idSky, vis
+
+	'Geometry Magic Positioning
+	op.Type="RotateY"
+	op.val1=-90 ' mm shift
+	AddOperation idSky, op
+
+	op.Type="ShiftX"
+	op.val1=-objectsize*100 ' mm shift
+	AddOperation idSky, op
+
+	op.Type="RotateY"
+	op.val1=azi(i)+6 '
+	AddOperation idSky, op
+	op.Type="RotateZ"
+
+	op.val1=180
+	AddOperation idSky, op
+
+	AuxDataSetData idSky, "emitt", irradpatch(k+1)
+
+
+	'FindFullName( "Geometry.SkyModel.SkySegment 1" )
+
+	' TRIMMING TO A PERFECT PATCH SKY
+	' Yes, not elegant, but it works!
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 61")
+	bound = "!"".SkyModel.SkySegment 84"" & !"".SkyModel.SkySegment 62"" & !"".SkyModel.SkySegment 60"" & !"".SkyModel.SkySegment 31"" & !"".SkyModel.SkySegment 32"" & !"".SkyModel.SkySegment 85"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 109")
+	bound = "!"".SkyModel.SkySegment 126"" & !"".SkyModel.SkySegment 110"" & !"".SkyModel.SkySegment 108"" & !"".SkyModel.SkySegment 85"" & !"".SkyModel.SkySegment 86"" & !"".SkyModel.SkySegment 127"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 110")
+	bound = "!"".SkyModel.SkySegment 109"" & !"".SkyModel.SkySegment 111"" & !"".SkyModel.SkySegment 86"" & !"".SkyModel.SkySegment 87"" & !"".SkyModel.SkySegment 127"" & !"".SkyModel.SkySegment 128"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 111")
+	bound = "!"".SkyModel.SkySegment 110"" & !"".SkyModel.SkySegment 112"" & !"".SkyModel.SkySegment 87"" & !"".SkyModel.SkySegment 88"" & !"".SkyModel.SkySegment 128"" & !"".SkyModel.SkySegment 129"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 112")
+	bound = "!"".SkyModel.SkySegment 111"" & !"".SkyModel.SkySegment 113"" & !"".SkyModel.SkySegment 88"" & !"".SkyModel.SkySegment 89"" & !"".SkyModel.SkySegment 90"" & !"".SkyModel.SkySegment 129"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 113")
+	bound = "!"".SkyModel.SkySegment 112"" & !"".SkyModel.SkySegment 114"" & !"".SkyModel.SkySegment 90"" & !"".SkyModel.SkySegment 91"" & !"".SkyModel.SkySegment 129"" & !"".SkyModel.SkySegment 130"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 114")
+	bound = "!"".SkyModel.SkySegment 113"" & !"".SkyModel.SkySegment 115"" & !"".SkyModel.SkySegment 91"" & !"".SkyModel.SkySegment 92"" & !"".SkyModel.SkySegment 130"" & !"".SkyModel.SkySegment 131"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 115")
+	bound = "!"".SkyModel.SkySegment 114"" & !"".SkyModel.SkySegment 116"" & !"".SkyModel.SkySegment 92"" & !"".SkyModel.SkySegment 93"" & !"".SkyModel.SkySegment 94"" & !"".SkyModel.SkySegment 131"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 116")
+	bound = "!"".SkyModel.SkySegment 115"" & !"".SkyModel.SkySegment 117"" & !"".SkyModel.SkySegment 94"" & !"".SkyModel.SkySegment 95"" & !"".SkyModel.SkySegment 131"" & !"".SkyModel.SkySegment 132"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 117")
+	bound = "!"".SkyModel.SkySegment 116"" & !"".SkyModel.SkySegment 118"" & !"".SkyModel.SkySegment 95"" & !"".SkyModel.SkySegment 96"" & !"".SkyModel.SkySegment 132"" & !"".SkyModel.SkySegment 133"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 118")
+	bound = "!"".SkyModel.SkySegment 117"" & !"".SkyModel.SkySegment 119"" & !"".SkyModel.SkySegment 96"" & !"".SkyModel.SkySegment 97"" & !"".SkyModel.SkySegment 98"" & !"".SkyModel.SkySegment 133"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 119")
+	bound = "!"".SkyModel.SkySegment 118"" & !"".SkyModel.SkySegment 120"" & !"".SkyModel.SkySegment 98"" & !"".SkyModel.SkySegment 99"" & !"".SkyModel.SkySegment 133"" & !"".SkyModel.SkySegment 134"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 120")
+	bound = "!"".SkyModel.SkySegment 119"" & !"".SkyModel.SkySegment 121"" & !"".SkyModel.SkySegment 99"" & !"".SkyModel.SkySegment 100"" & !"".SkyModel.SkySegment 134"" & !"".SkyModel.SkySegment 135"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 121")
+	bound = "!"".SkyModel.SkySegment 120"" & !"".SkyModel.SkySegment 122"" & !"".SkyModel.SkySegment 100"" & !"".SkyModel.SkySegment 101"" & !"".SkyModel.SkySegment 102"" & !"".SkyModel.SkySegment 135"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 122")
+	bound = "!"".SkyModel.SkySegment 121"" & !"".SkyModel.SkySegment 123"" & !"".SkyModel.SkySegment 102"" & !"".SkyModel.SkySegment 103"" & !"".SkyModel.SkySegment 135"" & !"".SkyModel.SkySegment 136"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 123")
+	bound = "!"".SkyModel.SkySegment 122"" & !"".SkyModel.SkySegment 124"" & !"".SkyModel.SkySegment 103"" & !"".SkyModel.SkySegment 104"" & !"".SkyModel.SkySegment 136"" & !"".SkyModel.SkySegment 137"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 124")
+	bound = "!"".SkyModel.SkySegment 123"" & !"".SkyModel.SkySegment 125"" & !"".SkyModel.SkySegment 104"" & !"".SkyModel.SkySegment 105"" & !"".SkyModel.SkySegment 106"" & !"".SkyModel.SkySegment 137"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 125")
+	bound = "!"".SkyModel.SkySegment 124"" & !"".SkyModel.SkySegment 126"" & !"".SkyModel.SkySegment 106"" & !"".SkyModel.SkySegment 107"" & !"".SkyModel.SkySegment 137"" & !"".SkyModel.SkySegment 138"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 126")
+	bound = "!"".SkyModel.SkySegment 125"" & !"".SkyModel.SkySegment 109"" & !"".SkyModel.SkySegment 107"" & !"".SkyModel.SkySegment 108"" & !"".SkyModel.SkySegment 138"" & !"".SkyModel.SkySegment 127"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 127")
+	bound = "!"".SkyModel.SkySegment 138"" & !"".SkyModel.SkySegment 128"" & !"".SkyModel.SkySegment 126"" & !"".SkyModel.SkySegment 109"" & !"".SkyModel.SkySegment 110"" & !"".SkyModel.SkySegment 139"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 128")
+	bound = "!"".SkyModel.SkySegment 127"" & !"".SkyModel.SkySegment 129"" & !"".SkyModel.SkySegment 110"" & !"".SkyModel.SkySegment 111"" & !"".SkyModel.SkySegment 139"" & !"".SkyModel.SkySegment 140"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 129")
+	bound = "!"".SkyModel.SkySegment 128"" & !"".SkyModel.SkySegment 130"" & !"".SkyModel.SkySegment 111"" & !"".SkyModel.SkySegment 112"" & !"".SkyModel.SkySegment 113"" & !"".SkyModel.SkySegment 140"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 130")
+	bound = "!"".SkyModel.SkySegment 129"" & !"".SkyModel.SkySegment 131"" & !"".SkyModel.SkySegment 113"" & !"".SkyModel.SkySegment 114"" & !"".SkyModel.SkySegment 140"" & !"".SkyModel.SkySegment 141"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 131")
+	bound = "!"".SkyModel.SkySegment 130"" & !"".SkyModel.SkySegment 132"" & !"".SkyModel.SkySegment 114"" & !"".SkyModel.SkySegment 115"" & !"".SkyModel.SkySegment 116"" & !"".SkyModel.SkySegment 141"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 132")
+	bound = "!"".SkyModel.SkySegment 131"" & !"".SkyModel.SkySegment 133"" & !"".SkyModel.SkySegment 116"" & !"".SkyModel.SkySegment 117"" & !"".SkyModel.SkySegment 141"" & !"".SkyModel.SkySegment 142"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 133")
+	bound = "!"".SkyModel.SkySegment 132"" & !"".SkyModel.SkySegment 134"" & !"".SkyModel.SkySegment 117"" & !"".SkyModel.SkySegment 118"" & !"".SkyModel.SkySegment 119"" & !"".SkyModel.SkySegment 142"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 134")
+	bound = "!"".SkyModel.SkySegment 133"" & !"".SkyModel.SkySegment 135"" & !"".SkyModel.SkySegment 119"" & !"".SkyModel.SkySegment 120"" & !"".SkyModel.SkySegment 142"" & !"".SkyModel.SkySegment 143"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 135")
+	bound = "!"".SkyModel.SkySegment 134"" & !"".SkyModel.SkySegment 136"" & !"".SkyModel.SkySegment 120"" & !"".SkyModel.SkySegment 121"" & !"".SkyModel.SkySegment 122"" & !"".SkyModel.SkySegment 143"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 136")
+	bound = "!"".SkyModel.SkySegment 135"" & !"".SkyModel.SkySegment 137"" & !"".SkyModel.SkySegment 122"" & !"".SkyModel.SkySegment 123"" & !"".SkyModel.SkySegment 143"" & !"".SkyModel.SkySegment 144"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 137")
+	bound = "!"".SkyModel.SkySegment 136"" & !"".SkyModel.SkySegment 138"" & !"".SkyModel.SkySegment 123"" & !"".SkyModel.SkySegment 124"" & !"".SkyModel.SkySegment 125"" & !"".SkyModel.SkySegment 144"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 138")
+	bound = "!"".SkyModel.SkySegment 137"" & !"".SkyModel.SkySegment 127"" & !"".SkyModel.SkySegment 125"" & !"".SkyModel.SkySegment 126"" & !"".SkyModel.SkySegment 144"" & !"".SkyModel.SkySegment 139"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 139")
+	bound = "!"".SkyModel.SkySegment 144"" & !"".SkyModel.SkySegment 140"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 138"" & !"".SkyModel.SkySegment 127"" & !"".SkyModel.SkySegment 128"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 140")
+	bound = "!"".SkyModel.SkySegment 139"" & !"".SkyModel.SkySegment 141"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 128"" & !"".SkyModel.SkySegment 129"" & !"".SkyModel.SkySegment 130"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 141")
+	bound = "!"".SkyModel.SkySegment 140"" & !"".SkyModel.SkySegment 142"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 130"" & !"".SkyModel.SkySegment 131"" & !"".SkyModel.SkySegment 132"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 142")
+	bound = "!"".SkyModel.SkySegment 141"" & !"".SkyModel.SkySegment 143"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 132"" & !"".SkyModel.SkySegment 133"" & !"".SkyModel.SkySegment 134"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 143")
+	bound = "!"".SkyModel.SkySegment 142"" & !"".SkyModel.SkySegment 144"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 134"" & !"".SkyModel.SkySegment 135"" & !"".SkyModel.SkySegment 136"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 144")
+	bound = "!"".SkyModel.SkySegment 143"" & !"".SkyModel.SkySegment 139"" & !"".SkyModel.SkySegment 145"" & !"".SkyModel.SkySegment 136"" & !"".SkyModel.SkySegment 137"" & !"".SkyModel.SkySegment 138"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 145")
+	bound = "!"".SkyModel.SkySegment 139"" & !"".SkyModel.SkySegment 140"" & !"".SkyModel.SkySegment 141"" & !"".SkyModel.SkySegment 142"" & !"".SkyModel.SkySegment 143"" & !"".SkyModel.SkySegment 144"""
+	SetTrimmingSpec idSky, bound
+
+
+
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 32")
+	bound = "!"".SkyModel.SkySegment 31"" & !"".SkyModel.SkySegment 33"" & !"".SkyModel.SkySegment 2"" & !"".SkyModel.SkySegment 61"" & !"".SkyModel.SkySegment 62"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 33")
+	bound = "!"".SkyModel.SkySegment 32"" & !"".SkyModel.SkySegment 34"" & !"".SkyModel.SkySegment 3"" & !"".SkyModel.SkySegment 62"" & !"".SkyModel.SkySegment 63"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 34")
+	bound = "!"".SkyModel.SkySegment 33"" & !"".SkyModel.SkySegment 35"" & !"".SkyModel.SkySegment 4"" & !"".SkyModel.SkySegment 63"" & !"".SkyModel.SkySegment 64"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 35")
+	bound = "!"".SkyModel.SkySegment 34"" & !"".SkyModel.SkySegment 36"" & !"".SkyModel.SkySegment 5"" & !"".SkyModel.SkySegment 64"" & !"".SkyModel.SkySegment 65"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 37")
+	bound = "!"".SkyModel.SkySegment 36"" & !"".SkyModel.SkySegment 38"" & !"".SkyModel.SkySegment 7"" & !"".SkyModel.SkySegment 65"" & !"".SkyModel.SkySegment 66"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 38")
+	bound = "!"".SkyModel.SkySegment 37"" & !"".SkyModel.SkySegment 39"" & !"".SkyModel.SkySegment 8"" & !"".SkyModel.SkySegment 66"" & !"".SkyModel.SkySegment 67"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 39")
+	bound = "!"".SkyModel.SkySegment 38"" & !"".SkyModel.SkySegment 40"" & !"".SkyModel.SkySegment 9"" & !"".SkyModel.SkySegment 67"" & !"".SkyModel.SkySegment 68"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 40")
+	bound = "!"".SkyModel.SkySegment 39"" & !"".SkyModel.SkySegment 41"" & !"".SkyModel.SkySegment 10"" & !"".SkyModel.SkySegment 68"" & !"".SkyModel.SkySegment 69"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 42")
+	bound = "!"".SkyModel.SkySegment 41"" & !"".SkyModel.SkySegment 43"" & !"".SkyModel.SkySegment 12"" & !"".SkyModel.SkySegment 69"" & !"".SkyModel.SkySegment 70"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 43")
+	bound = "!"".SkyModel.SkySegment 42"" & !"".SkyModel.SkySegment 44"" & !"".SkyModel.SkySegment 13"" & !"".SkyModel.SkySegment 70"" & !"".SkyModel.SkySegment 71"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 44")
+	bound = "!"".SkyModel.SkySegment 43"" & !"".SkyModel.SkySegment 45"" & !"".SkyModel.SkySegment 14"" & !"".SkyModel.SkySegment 71"" & !"".SkyModel.SkySegment 72"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 45")
+	bound = "!"".SkyModel.SkySegment 44"" & !"".SkyModel.SkySegment 46"" & !"".SkyModel.SkySegment 15"" & !"".SkyModel.SkySegment 72"" & !"".SkyModel.SkySegment 73"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 47")
+	bound = "!"".SkyModel.SkySegment 46"" & !"".SkyModel.SkySegment 48"" & !"".SkyModel.SkySegment 17"" & !"".SkyModel.SkySegment 73"" & !"".SkyModel.SkySegment 74"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 48")
+	bound = "!"".SkyModel.SkySegment 47"" & !"".SkyModel.SkySegment 49"" & !"".SkyModel.SkySegment 18"" & !"".SkyModel.SkySegment 74"" & !"".SkyModel.SkySegment 75"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 49")
+	bound = "!"".SkyModel.SkySegment 48"" & !"".SkyModel.SkySegment 50"" & !"".SkyModel.SkySegment 19"" & !"".SkyModel.SkySegment 75"" & !"".SkyModel.SkySegment 76"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 50")
+	bound = "!"".SkyModel.SkySegment 49"" & !"".SkyModel.SkySegment 51"" & !"".SkyModel.SkySegment 20"" & !"".SkyModel.SkySegment 76"" & !"".SkyModel.SkySegment 77"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 52")
+	bound = "!"".SkyModel.SkySegment 51"" & !"".SkyModel.SkySegment 53"" & !"".SkyModel.SkySegment 22"" & !"".SkyModel.SkySegment 77"" & !"".SkyModel.SkySegment 78"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 53")
+	bound = "!"".SkyModel.SkySegment 52"" & !"".SkyModel.SkySegment 54"" & !"".SkyModel.SkySegment 23"" & !"".SkyModel.SkySegment 78"" & !"".SkyModel.SkySegment 79"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 54")
+	bound = "!"".SkyModel.SkySegment 53"" & !"".SkyModel.SkySegment 55"" & !"".SkyModel.SkySegment 24"" & !"".SkyModel.SkySegment 79"" & !"".SkyModel.SkySegment 80"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 55")
+	bound = "!"".SkyModel.SkySegment 54"" & !"".SkyModel.SkySegment 56"" & !"".SkyModel.SkySegment 25"" & !"".SkyModel.SkySegment 80"" & !"".SkyModel.SkySegment 81"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 57")
+	bound = "!"".SkyModel.SkySegment 56"" & !"".SkyModel.SkySegment 58"" & !"".SkyModel.SkySegment 27"" & !"".SkyModel.SkySegment 81"" & !"".SkyModel.SkySegment 82"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 58")
+	bound = "!"".SkyModel.SkySegment 57"" & !"".SkyModel.SkySegment 59"" & !"".SkyModel.SkySegment 28"" & !"".SkyModel.SkySegment 82"" & !"".SkyModel.SkySegment 83"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 59")
+	bound = "!"".SkyModel.SkySegment 58"" & !"".SkyModel.SkySegment 60"" & !"".SkyModel.SkySegment 29"" & !"".SkyModel.SkySegment 83"" & !"".SkyModel.SkySegment 84"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 60")
+	bound = "!"".SkyModel.SkySegment 59"" & !"".SkyModel.SkySegment 31"" & !"".SkyModel.SkySegment 30"" & !"".SkyModel.SkySegment 84"" & !"".SkyModel.SkySegment 61"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 65")
+	bound = "!"".SkyModel.SkySegment 64"" & !"".SkyModel.SkySegment 66"" & !"".SkyModel.SkySegment 35"" & !"".SkyModel.SkySegment 36"" & !"".SkyModel.SkySegment 37"" & !"".SkyModel.SkySegment 89"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 69")
+	bound = "!"".SkyModel.SkySegment 68"" & !"".SkyModel.SkySegment 70"" & !"".SkyModel.SkySegment 40"" & !"".SkyModel.SkySegment 41"" & !"".SkyModel.SkySegment 42"" & !"".SkyModel.SkySegment 93"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 73")
+	bound = "!"".SkyModel.SkySegment 72"" & !"".SkyModel.SkySegment 74"" & !"".SkyModel.SkySegment 45"" & !"".SkyModel.SkySegment 46"" & !"".SkyModel.SkySegment 47"" & !"".SkyModel.SkySegment 97"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 77")
+	bound = "!"".SkyModel.SkySegment 76"" & !"".SkyModel.SkySegment 78"" & !"".SkyModel.SkySegment 50"" & !"".SkyModel.SkySegment 51"" & !"".SkyModel.SkySegment 52"" & !"".SkyModel.SkySegment 101"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 81")
+	bound = "!"".SkyModel.SkySegment 80"" & !"".SkyModel.SkySegment 82"" & !"".SkyModel.SkySegment 55"" & !"".SkyModel.SkySegment 56"" & !"".SkyModel.SkySegment 57"" & !"".SkyModel.SkySegment 105"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 86")
+	bound = "!"".SkyModel.SkySegment 62"" & !"".SkyModel.SkySegment 85"" & !"".SkyModel.SkySegment 87"" & !"".SkyModel.SkySegment 109"" & !"".SkyModel.SkySegment 110"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 87")
+	bound = "!"".SkyModel.SkySegment 63"" & !"".SkyModel.SkySegment 86"" & !"".SkyModel.SkySegment 88"" & !"".SkyModel.SkySegment 110"" & !"".SkyModel.SkySegment 111"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 88")
+	bound = "!"".SkyModel.SkySegment 64"" & !"".SkyModel.SkySegment 87"" & !"".SkyModel.SkySegment 89"" & !"".SkyModel.SkySegment 111"" & !"".SkyModel.SkySegment 112"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 90")
+	bound = "!"".SkyModel.SkySegment 66"" & !"".SkyModel.SkySegment 89"" & !"".SkyModel.SkySegment 91"" & !"".SkyModel.SkySegment 112"" & !"".SkyModel.SkySegment 113"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 91")
+	bound = "!"".SkyModel.SkySegment 67"" & !"".SkyModel.SkySegment 90"" & !"".SkyModel.SkySegment 92"" & !"".SkyModel.SkySegment 113"" & !"".SkyModel.SkySegment 114"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 92")
+	bound = "!"".SkyModel.SkySegment 68"" & !"".SkyModel.SkySegment 91"" & !"".SkyModel.SkySegment 93"" & !"".SkyModel.SkySegment 114"" & !"".SkyModel.SkySegment 115"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 94")
+	bound = "!"".SkyModel.SkySegment 70"" & !"".SkyModel.SkySegment 93"" & !"".SkyModel.SkySegment 95"" & !"".SkyModel.SkySegment 115"" & !"".SkyModel.SkySegment 116"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 95")
+	bound = "!"".SkyModel.SkySegment 71"" & !"".SkyModel.SkySegment 94"" & !"".SkyModel.SkySegment 96"" & !"".SkyModel.SkySegment 116"" & !"".SkyModel.SkySegment 117"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 96")
+	bound = "!"".SkyModel.SkySegment 72"" & !"".SkyModel.SkySegment 95"" & !"".SkyModel.SkySegment 97"" & !"".SkyModel.SkySegment 117"" & !"".SkyModel.SkySegment 118"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 98")
+	bound = "!"".SkyModel.SkySegment 74"" & !"".SkyModel.SkySegment 97"" & !"".SkyModel.SkySegment 99"" & !"".SkyModel.SkySegment 118"" & !"".SkyModel.SkySegment 119"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 99")
+	bound = "!"".SkyModel.SkySegment 75"" & !"".SkyModel.SkySegment 98"" & !"".SkyModel.SkySegment 100"" & !"".SkyModel.SkySegment 119"" & !"".SkyModel.SkySegment 120"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 100")
+	bound = "!"".SkyModel.SkySegment 76"" & !"".SkyModel.SkySegment 99"" & !"".SkyModel.SkySegment 101"" & !"".SkyModel.SkySegment 120"" & !"".SkyModel.SkySegment 121"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 102")
+	bound = "!"".SkyModel.SkySegment 78"" & !"".SkyModel.SkySegment 101"" & !"".SkyModel.SkySegment 103"" & !"".SkyModel.SkySegment 121"" & !"".SkyModel.SkySegment 122"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 103")
+	bound = "!"".SkyModel.SkySegment 79"" & !"".SkyModel.SkySegment 102"" & !"".SkyModel.SkySegment 104"" & !"".SkyModel.SkySegment 122"" & !"".SkyModel.SkySegment 123"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 104")
+	bound = "!"".SkyModel.SkySegment 80"" & !"".SkyModel.SkySegment 103"" & !"".SkyModel.SkySegment 105"" & !"".SkyModel.SkySegment 123"" & !"".SkyModel.SkySegment 124"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 106")
+	bound = "!"".SkyModel.SkySegment 82"" & !"".SkyModel.SkySegment 105"" & !"".SkyModel.SkySegment 107"" & !"".SkyModel.SkySegment 124"" & !"".SkyModel.SkySegment 125"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 107")
+	bound = "!"".SkyModel.SkySegment 83"" & !"".SkyModel.SkySegment 106"" & !"".SkyModel.SkySegment 108"" & !"".SkyModel.SkySegment 125"" & !"".SkyModel.SkySegment 126"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 108")
+	bound = "!"".SkyModel.SkySegment 84"" & !"".SkyModel.SkySegment 107"" & !"".SkyModel.SkySegment 85"" & !"".SkyModel.SkySegment 126"" & !"".SkyModel.SkySegment 109"""
+	SetTrimmingSpec idSky, bound
+
+
+
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 31")
+	bound = "!"".SkyModel.SkySegment 32"" & !"".SkyModel.SkySegment 60"" & !"".SkyModel.SkySegment 1"" & !"".SkyModel.SkySegment 61"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 36")
+	bound = "!"".SkyModel.SkySegment 35"" & !"".SkyModel.SkySegment 37"" & !"".SkyModel.SkySegment 6"" & !"".SkyModel.SkySegment 65"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 41")
+	bound = "!"".SkyModel.SkySegment 40"" & !"".SkyModel.SkySegment 42"" & !"".SkyModel.SkySegment 11"" & !"".SkyModel.SkySegment 69"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 46")
+	bound = "!"".SkyModel.SkySegment 45"" & !"".SkyModel.SkySegment 47"" & !"".SkyModel.SkySegment 16"" & !"".SkyModel.SkySegment 73"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 51")
+	bound = "!"".SkyModel.SkySegment 50"" & !"".SkyModel.SkySegment 52"" & !"".SkyModel.SkySegment 21"" & !"".SkyModel.SkySegment 77"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 56")
+	bound = "!"".SkyModel.SkySegment 55"" & !"".SkyModel.SkySegment 57"" & !"".SkyModel.SkySegment 26"" & !"".SkyModel.SkySegment 81"""
+	SetTrimmingSpec idSky, bound
+
+	'CHECK THIS
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 62")
+	bound = "!"".SkyModel.SkySegment 61"" & !"".SkyModel.SkySegment 63"" & !"".SkyModel.SkySegment 32"" & !"".SkyModel.SkySegment 33"" & !"".SkyModel.SkySegment 86"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 63")
+	bound = "!"".SkyModel.SkySegment 62"" & !"".SkyModel.SkySegment 64"" & !"".SkyModel.SkySegment 33"" & !"".SkyModel.SkySegment 34"" & !"".SkyModel.SkySegment 87"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 64")
+	bound = "!"".SkyModel.SkySegment 63"" & !"".SkyModel.SkySegment 65"" & !"".SkyModel.SkySegment 34"" & !"".SkyModel.SkySegment 35"" & !"".SkyModel.SkySegment 88"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 66")
+	bound = "!"".SkyModel.SkySegment 65"" & !"".SkyModel.SkySegment 67"" & !"".SkyModel.SkySegment 37"" & !"".SkyModel.SkySegment 38"" & !"".SkyModel.SkySegment 90"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 67")
+	bound = "!"".SkyModel.SkySegment 66"" & !"".SkyModel.SkySegment 68"" & !"".SkyModel.SkySegment 38"" & !"".SkyModel.SkySegment 39"" & !"".SkyModel.SkySegment 91"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 68")
+	bound = "!"".SkyModel.SkySegment 67"" & !"".SkyModel.SkySegment 69"" & !"".SkyModel.SkySegment 30"" & !"".SkyModel.SkySegment 40"" & !"".SkyModel.SkySegment 92"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 70")
+	bound = "!"".SkyModel.SkySegment 69"" & !"".SkyModel.SkySegment 71"" & !"".SkyModel.SkySegment 42"" & !"".SkyModel.SkySegment 43"" & !"".SkyModel.SkySegment 94"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 71")
+	bound = "!"".SkyModel.SkySegment 70"" & !"".SkyModel.SkySegment 72"" & !"".SkyModel.SkySegment 43"" & !"".SkyModel.SkySegment 44"" & !"".SkyModel.SkySegment 95"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 72")
+	bound = "!"".SkyModel.SkySegment 71"" & !"".SkyModel.SkySegment 73"" & !"".SkyModel.SkySegment 44"" & !"".SkyModel.SkySegment 45"" & !"".SkyModel.SkySegment 96"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 74")
+	bound = "!"".SkyModel.SkySegment 73"" & !"".SkyModel.SkySegment 75"" & !"".SkyModel.SkySegment 47"" & !"".SkyModel.SkySegment 48"" & !"".SkyModel.SkySegment 98"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 75")
+	bound = "!"".SkyModel.SkySegment 74"" & !"".SkyModel.SkySegment 76"" & !"".SkyModel.SkySegment 48"" & !"".SkyModel.SkySegment 49"" & !"".SkyModel.SkySegment 99"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 76")
+	bound = "!"".SkyModel.SkySegment 75"" & !"".SkyModel.SkySegment 77"" & !"".SkyModel.SkySegment 49"" & !"".SkyModel.SkySegment 50"" & !"".SkyModel.SkySegment 100"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 78")
+	bound = "!"".SkyModel.SkySegment 77"" & !"".SkyModel.SkySegment 79"" & !"".SkyModel.SkySegment 52"" & !"".SkyModel.SkySegment 53"" & !"".SkyModel.SkySegment 102"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 79")
+	bound = "!"".SkyModel.SkySegment 78"" & !"".SkyModel.SkySegment 80"" & !"".SkyModel.SkySegment 53"" & !"".SkyModel.SkySegment 54"" & !"".SkyModel.SkySegment 103"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 80")
+	bound = "!"".SkyModel.SkySegment 79"" & !"".SkyModel.SkySegment 81"" & !"".SkyModel.SkySegment 54"" & !"".SkyModel.SkySegment 55"" & !"".SkyModel.SkySegment 104"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 82")
+	bound = "!"".SkyModel.SkySegment 81"" & !"".SkyModel.SkySegment 83"" & !"".SkyModel.SkySegment 57"" & !"".SkyModel.SkySegment 58"" & !"".SkyModel.SkySegment 106"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 83")
+	bound = "!"".SkyModel.SkySegment 82"" & !"".SkyModel.SkySegment 84"" & !"".SkyModel.SkySegment 58"" & !"".SkyModel.SkySegment 59"" & !"".SkyModel.SkySegment 107"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 84")
+	bound = "!"".SkyModel.SkySegment 83"" & !"".SkyModel.SkySegment 61"" & !"".SkyModel.SkySegment 59"" & !"".SkyModel.SkySegment 60"" & !"".SkyModel.SkySegment 108"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 85")
+	bound = "!"".SkyModel.SkySegment 61"" & !"".SkyModel.SkySegment 108"" & !"".SkyModel.SkySegment 86"" & !"".SkyModel.SkySegment 109"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 89")
+	bound = "!"".SkyModel.SkySegment 65"" & !"".SkyModel.SkySegment 88"" & !"".SkyModel.SkySegment 90"" & !"".SkyModel.SkySegment 112"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 93")
+	bound = "!"".SkyModel.SkySegment 69"" & !"".SkyModel.SkySegment 92"" & !"".SkyModel.SkySegment 94"" & !"".SkyModel.SkySegment 115"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 97")
+	bound = "!"".SkyModel.SkySegment 73"" & !"".SkyModel.SkySegment 96"" & !"".SkyModel.SkySegment 98"" & !"".SkyModel.SkySegment 118"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 101")
+	bound = "!"".SkyModel.SkySegment 77"" & !"".SkyModel.SkySegment 100"" & !"".SkyModel.SkySegment 102"" & !"".SkyModel.SkySegment 121"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 105")
+	bound = "!"".SkyModel.SkySegment 81"" & !"".SkyModel.SkySegment 104"" & !"".SkyModel.SkySegment 106"" & !"".SkyModel.SkySegment 124"""
+	SetTrimmingSpec idSky, bound
+
+
+
+
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 1")
+	bound = "!"".SkyModel.SkySegment 30"" & !"".SkyModel.SkySegment 2"" & !"".SkyModel.SkySegment 31"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 2")
+	bound = "!"".SkyModel.SkySegment 1"" & !"".SkyModel.SkySegment 3"" & !"".SkyModel.SkySegment 32"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 3")
+	bound = "!"".SkyModel.SkySegment 2"" & !"".SkyModel.SkySegment 4"" & !"".SkyModel.SkySegment 33"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 4")
+	bound = "!"".SkyModel.SkySegment 3"" & !"".SkyModel.SkySegment 5"" & !"".SkyModel.SkySegment 34"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 5")
+	bound = "!"".SkyModel.SkySegment 4"" & !"".SkyModel.SkySegment 6"" & !"".SkyModel.SkySegment 35"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 6")
+	bound = "!"".SkyModel.SkySegment 5"" & !"".SkyModel.SkySegment 7"" & !"".SkyModel.SkySegment 36"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 7")
+	bound = "!"".SkyModel.SkySegment 6"" & !"".SkyModel.SkySegment 8"" & !"".SkyModel.SkySegment 37"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 8")
+	bound = "!"".SkyModel.SkySegment 7"" & !"".SkyModel.SkySegment 9"" & !"".SkyModel.SkySegment 38"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 9")
+	bound = "!"".SkyModel.SkySegment 8"" & !"".SkyModel.SkySegment 10"" & !"".SkyModel.SkySegment 39"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 10")
+	bound = "!"".SkyModel.SkySegment 9"" & !"".SkyModel.SkySegment 11"" & !"".SkyModel.SkySegment 40"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 11")
+	bound = "!"".SkyModel.SkySegment 10"" & !"".SkyModel.SkySegment 12"" & !"".SkyModel.SkySegment 41"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 12")
+	bound = "!"".SkyModel.SkySegment 11"" & !"".SkyModel.SkySegment 13"" & !"".SkyModel.SkySegment 42"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 13")
+	bound = "!"".SkyModel.SkySegment 12"" & !"".SkyModel.SkySegment 14"" & !"".SkyModel.SkySegment 43"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 14")
+	bound = "!"".SkyModel.SkySegment 13"" & !"".SkyModel.SkySegment 15"" & !"".SkyModel.SkySegment 44"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 15")
+	bound = "!"".SkyModel.SkySegment 14"" & !"".SkyModel.SkySegment 16"" & !"".SkyModel.SkySegment 45"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 16")
+	bound = "!"".SkyModel.SkySegment 15"" & !"".SkyModel.SkySegment 17"" & !"".SkyModel.SkySegment 46"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 17")
+	bound = "!"".SkyModel.SkySegment 16"" & !"".SkyModel.SkySegment 18"" & !"".SkyModel.SkySegment 47"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 18")
+	bound = "!"".SkyModel.SkySegment 17"" & !"".SkyModel.SkySegment 19"" & !"".SkyModel.SkySegment 48"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 19")
+	bound = "!"".SkyModel.SkySegment 18"" & !"".SkyModel.SkySegment 20"" & !"".SkyModel.SkySegment 49"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 20")
+	bound = "!"".SkyModel.SkySegment 19"" & !"".SkyModel.SkySegment 21"" & !"".SkyModel.SkySegment 50"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 21")
+	bound = "!"".SkyModel.SkySegment 20"" & !"".SkyModel.SkySegment 22"" & !"".SkyModel.SkySegment 51"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 22")
+	bound = "!"".SkyModel.SkySegment 21"" & !"".SkyModel.SkySegment 23"" & !"".SkyModel.SkySegment 52"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 23")
+	bound = "!"".SkyModel.SkySegment 22"" & !"".SkyModel.SkySegment 24"" & !"".SkyModel.SkySegment 53"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 24")
+	bound = "!"".SkyModel.SkySegment 23"" & !"".SkyModel.SkySegment 25"" & !"".SkyModel.SkySegment 54"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 25")
+	bound = "!"".SkyModel.SkySegment 24"" & !"".SkyModel.SkySegment 26"" & !"".SkyModel.SkySegment 55"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 26")
+	bound = "!"".SkyModel.SkySegment 25"" & !"".SkyModel.SkySegment 27"" & !"".SkyModel.SkySegment 56"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 27")
+	bound = "!"".SkyModel.SkySegment 26"" & !"".SkyModel.SkySegment 28"" & !"".SkyModel.SkySegment 57"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 28")
+	bound = "!"".SkyModel.SkySegment 27"" & !"".SkyModel.SkySegment 29"" & !"".SkyModel.SkySegment 58"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 29")
+	bound = "!"".SkyModel.SkySegment 28"" & !"".SkyModel.SkySegment 30"" & !"".SkyModel.SkySegment 59"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+	idSky = FindFullName ("Geometry.SkyModel.SkySegment 30")
+	bound = "!"".SkyModel.SkySegment 29"" & !"".SkyModel.SkySegment 1"" & !"".SkyModel.SkySegment 60"" & !"".SkyModel.GROUND.Surface"""
+	SetTrimmingSpec idSky, bound
+
+	Update
+
+End Function
+
+
+Sub Main
+
+'	BASEFilename = "D:\Dropbox\sayala_lab\Bifacials\Demo_Panel\data\"
+'	genCumSkyFile = BASEFilename & "cumulative_Tucson_6_17_7am_FRED.txt" ' 6/17 at 7 AM
+' 	genCumulSky(1000, 180, genCumSkyFile, 0.62)
+
+End Sub

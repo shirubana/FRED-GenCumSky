@@ -1,0 +1,16 @@
+'#Language "WWB-COM"
+
+Option Explicit
+
+Sub Main
+
+	Dim mylibModel As Object
+
+	Set mylibModel = CreateLib ("D:\Dropbox\sayala_lab\SPIE2018\FRED\CreateSource_and_SampleIrradiance.frs")
+	mylibModel.IrradAtModule("D:\Dropbox\sayala_lab\SPIE2018\FRED\data\Output\11 - 10NM_VerticalOnly_Lambertian80Snow_FIXED.csv")
+
+	'11 and 10 are wrong. re - do. Forgot to erase source
+	'y10NM_VerticalOnly_Lambertian80Snow.cs
+
+
+End Sub
